@@ -1,0 +1,12 @@
+{
+  "name": "smart-home-store/newsletter-service",
+  "description": "PHP newsletter subscription and email service for Smart Home Store",
+  "type": "project",
+  "require": {
+    "php": "^8.3",
+    "phpmailer/phpmailer": "^6.10"
+  },
+  "config": {
+    "sort-packages": true
+  }
+}

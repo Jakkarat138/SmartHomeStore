@@ -1,0 +1,84 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: smart-home-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: smart_home_store
+      MYSQL_USER: smart_user
+      MYSQL_PASSWORD: smart_password
+      MYSQL_ROOT_PASSWORD: root_password
+      TZ: Asia/Bangkok
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD","mysqladmin","ping","-h","localhost","-uroot","-proot_password"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  app:
+    build: .
+    container_name: smart-home-app
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: mysql://smart_user:smart_password@mysql:3306/smart_home_store
+      SESSION_SECRET: ${SESSION_SECRET}
+      NEWSLETTER_SERVICE_URL: http://newsletter/subscribe.php
+      MEMBER_EMAIL_SERVICE_URL: http://newsletter/member-welcome.php
+      NEWSLETTER_SHARED_SECRET: ${NEWSLETTER_SHARED_SECRET:-local-newsletter-secret-change-me}
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      newsletter:
+        condition: service_started
+  newsletter:
+    build: ./newsletter
+    container_name: smart-home-newsletter
+    restart: unless-stopped
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: smart_home_store
+      DB_USER: smart_user
+      DB_PASSWORD: smart_password
+      SHOP_URL: ${SHOP_URL:-http://localhost:3000}
+      NEWSLETTER_PUBLIC_URL: ${NEWSLETTER_PUBLIC_URL:-http://localhost:8081}
+      NEWSLETTER_SHARED_SECRET: ${NEWSLETTER_SHARED_SECRET:-local-newsletter-secret-change-me}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_ENCRYPTION: ${SMTP_ENCRYPTION:-none}
+      MAIL_FROM: ${MAIL_FROM:-no-reply@smart-home-store.local}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-Smart Home Store}
+    ports:
+      - "8081:80"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: smart-home-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+  migrate:
+    image: mysql:8.4
+    container_name: smart-home-migrate
+    restart: "no"
+    environment:
+      MYSQL_PWD: smart_password
+    volumes:
+      - ./mysql/migrate.sql:/migrate.sql:ro
+    command: ["mysql","--default-character-set=utf8mb4","-h","mysql","-usmart_user","smart_home_store","-e","source /migrate.sql"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+volumes:
+  mysql_data:
