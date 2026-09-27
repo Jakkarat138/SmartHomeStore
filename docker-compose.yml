@@ -26,6 +26,7 @@ services:
       SESSION_SECRET: ${SESSION_SECRET}
       NEWSLETTER_SERVICE_URL: http://newsletter/subscribe.php
       MEMBER_EMAIL_SERVICE_URL: http://newsletter/member-welcome.php
+      ORDER_EMAIL_SERVICE_URL: http://newsletter/order-confirmation.php
       NEWSLETTER_SHARED_SECRET: ${NEWSLETTER_SHARED_SECRET:-local-newsletter-secret-change-me}
       NODE_ENV: production
     ports:
@@ -39,6 +40,8 @@ services:
     build: ./newsletter
     container_name: smart-home-newsletter
     restart: unless-stopped
+    volumes:
+      - ./public/smart-home-store-logo.png:/var/www/assets/smart-home-store-logo.png:ro
     environment:
       DB_HOST: mysql
       DB_PORT: 3306

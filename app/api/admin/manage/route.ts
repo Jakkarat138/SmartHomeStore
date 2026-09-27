@@ -3,10 +3,15 @@ import type {RowDataPacket,ResultSetHeader} from 'mysql2';
 import {requireAdmin} from '@/lib/auth';
 import {db} from '@/lib/db';
 
+function invalidOrigin(req:NextRequest){
+ const origin=req.headers.get('origin');
+ if(!origin)return false;
+ try{return new URL(origin).host!==req.headers.get('host')}catch{return true}
+}
+
 export async function PATCH(req:NextRequest){
  const admin=await requireAdmin();if(!admin)return NextResponse.json({error:'เฉพาะผู้ดูแลระบบ'},{status:403});
- const origin=req.headers.get('origin');
- if(origin){try{if(new URL(origin).host!==req.headers.get('host'))return NextResponse.json({error:'แหล่งคำขอไม่ถูกต้อง'},{status:403})}catch{return NextResponse.json({error:'แหล่งคำขอไม่ถูกต้อง'},{status:403})}}
+ if(invalidOrigin(req))return NextResponse.json({error:'แหล่งคำขอไม่ถูกต้อง'},{status:403});
  const body=await req.json().catch(()=>null) as {id:number;kind:string;status:string;stock:number}|null;
  if(!body||!Number.isSafeInteger(body.id)||body.id<1)return NextResponse.json({error:'ข้อมูลไม่ถูกต้อง'},{status:400});
  try{
@@ -38,4 +43,37 @@ export async function PATCH(req:NextRequest){
   }
   return NextResponse.json({error:'การทำงานไม่ถูกต้อง'},{status:400});
  }catch{return NextResponse.json({error:'บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง'},{status:500})}
+}
+
+export async function DELETE(req:NextRequest){
+ const admin=await requireAdmin();
+ if(!admin)return NextResponse.json({error:'เฉพาะผู้ดูแลระบบ'},{status:403});
+ if(invalidOrigin(req))return NextResponse.json({error:'แหล่งคำขอไม่ถูกต้อง'},{status:403});
+ const body=await req.json().catch(()=>null) as {id?:number}|null;
+ if(!body||!Number.isSafeInteger(body.id)||Number(body.id)<1)return NextResponse.json({error:'ข้อมูลสมาชิกไม่ถูกต้อง'},{status:400});
+ const memberId=Number(body.id);
+ if(memberId===admin.id)return NextResponse.json({error:'ไม่สามารถลบบัญชีที่กำลังใช้งานอยู่'},{status:409});
+ const connection=await db.getConnection();
+ try{
+  await connection.beginTransaction();
+  const[rows]=await connection.execute<RowDataPacket[]>('SELECT id,email,role FROM users WHERE id=? FOR UPDATE',[memberId]);
+  const member=rows[0];
+  if(!member){await connection.rollback();return NextResponse.json({error:'ไม่พบสมาชิก หรือบัญชีถูกลบแล้ว'},{status:404})}
+  if(member.role!=='USER'){await connection.rollback();return NextResponse.json({error:'ไม่สามารถลบบัญชีผู้ดูแลระบบ'},{status:409})}
+  await connection.execute('DELETE FROM newsletter_subscribers WHERE email=?',[member.email]);
+  await connection.execute('DELETE FROM addresses WHERE user_id=?',[memberId]);
+  const[result]=await connection.execute<ResultSetHeader>(`UPDATE users SET
+   username=CONCAT('deleted_',id,'_',SUBSTRING(REPLACE(UUID(),'-',''),1,12)),
+   email=CONCAT('deleted-',id,'-',SUBSTRING(REPLACE(UUID(),'-',''),1,12),'@deleted.invalid'),
+   password_hash=CONCAT('deleted:',UUID()),first_name='สมาชิก',last_name='ที่ถูกลบ',phone=NULL,
+   status='SUSPENDED',privacy_accepted_at=NULL,marketing_consent=FALSE,marketing_consent_at=NULL
+   WHERE id=? AND role='USER'`,[memberId]);
+  if(!result.affectedRows){await connection.rollback();return NextResponse.json({error:'ลบสมาชิกไม่สำเร็จ'},{status:409})}
+  await connection.commit();
+  return NextResponse.json({message:'ลบสมาชิกและข้อมูลส่วนตัวแล้ว'});
+ }catch(error){
+  await connection.rollback();
+  console.error('delete_member_failed',error);
+  return NextResponse.json({error:'ลบสมาชิกไม่สำเร็จ กรุณาลองอีกครั้ง'},{status:500});
+ }finally{connection.release()}
 }

@@ -310,3 +310,115 @@ HTML;
         @unlink($posterPath);
     }
 }
+
+function send_order_confirmation_email(array $order): void
+{
+    $shopUrl = public_http_url('SHOP_URL', 'http://localhost:3000');
+    $displayName = trim((string) ($order['firstName'] ?? '') . ' ' . (string) ($order['lastName'] ?? ''));
+    if ($displayName === '') {
+        $displayName = 'ลูกค้า';
+    }
+
+    $orderNumber = (string) $order['orderNumber'];
+    $orderUrl = $shopUrl . '/orders/' . rawurlencode($orderNumber);
+    $paymentLabels = [
+        'PROMPTPAY' => 'พร้อมเพย์ QR',
+        'CARD' => 'บัตรเครดิต/เดบิต',
+        'WALLET' => 'วอลเล็ต',
+    ];
+    $paymentMethod = (string) ($order['paymentMethod'] ?? '');
+    $paymentLabel = $paymentLabels[$paymentMethod] ?? 'ไม่ระบุ';
+    $paymentReference = trim((string) ($order['paymentReference'] ?? '')) ?: '-';
+    $grandTotal = (float) $order['grandTotal'];
+    $discount = (float) ($order['discount'] ?? 0);
+    $shipping = (float) ($order['shipping'] ?? 0);
+
+    $itemRows = '';
+    $plainItems = [];
+    foreach ($order['items'] as $item) {
+        $name = (string) $item['name'];
+        $quantity = (int) $item['quantity'];
+        $price = (float) $item['price'];
+        $lineTotal = $price * $quantity;
+        $safeName = html($name);
+        $safeQuantity = html((string) $quantity);
+        $safeLineTotal = html(number_format($lineTotal, 2));
+        $itemRows .= <<<HTML
+<tr>
+  <td style="padding:14px 0;border-bottom:1px solid #e7edf4;color:#10243e">{$safeName}<br><span style="font-size:12px;color:#7a8ba0">จำนวน {$safeQuantity}</span></td>
+  <td align="right" style="padding:14px 0;border-bottom:1px solid #e7edf4;font-weight:bold;color:#10243e">฿{$safeLineTotal}</td>
+</tr>
+HTML;
+        $plainItems[] = "- {$name} x{$quantity}: ฿" . number_format($lineTotal, 2);
+    }
+
+    $safeName = html($displayName);
+    $safeShop = html($shopUrl);
+    $safeOrderNumber = html($orderNumber);
+    $safeOrderUrl = html($orderUrl);
+    $safePaymentLabel = html($paymentLabel);
+    $safePaymentReference = html($paymentReference);
+    $safeGrandTotal = html(number_format($grandTotal, 2));
+    $safeDiscount = html(number_format($discount, 2));
+    $safeShipping = $shipping > 0 ? '฿' . html(number_format($shipping, 2)) : 'ฟรี';
+    $orderedAt = (new DateTimeImmutable('now', new DateTimeZone('Asia/Bangkok')))->format('d/m/Y H:i น.');
+
+    $mail = smtp_mailer((string) $order['email'], $displayName, "ยืนยันคำสั่งซื้อ {$orderNumber} | Smart Home Store");
+    $logoPath = '/var/www/assets/smart-home-store-logo.png';
+    if (!is_file($logoPath)) {
+        throw new RuntimeException('Smart Home Store logo was not found.');
+    }
+    $mail->addEmbeddedImage($logoPath, 'smart-home-store-logo', 'smart-home-store-logo.png', 'base64', 'image/png');
+    $mail->Body = <<<HTML
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light only">
+  <style>:root{color-scheme:light only}@media only screen and (max-width:700px){.outer-pad{padding:12px 6px!important}.email-body{padding:24px 18px!important}.hero-title{font-size:25px!important}.order-meta td{display:block!important;width:auto!important;text-align:left!important;padding:10px 14px!important}.step-label{font-size:9px!important}.cta{display:block!important;padding:15px 20px!important}}</style>
+</head>
+<body style="margin:0;padding:0;background-color:#edf3f8;font-family:Tahoma,Arial,sans-serif;color:#10243e;color-scheme:light only">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0">เราได้รับคำสั่งซื้อ {$safeOrderNumber} ของคุณแล้ว ยอดรวม ฿{$safeGrandTotal}</div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#edf3f8">
+    <tr><td class="outer-pad" align="center" style="padding:28px 12px">
+      <table role="presentation" width="680" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:680px;background-color:#ffffff;border:1px solid #dce6f0;border-radius:22px;overflow:hidden;box-shadow:0 18px 50px rgba(15,40,70,.10)">
+        <tr><td align="center" style="padding:20px 28px;background-color:#ffffff;border-bottom:1px solid #e7edf5">
+          <a href="{$safeShop}" target="_blank" style="display:inline-block;text-decoration:none"><img src="cid:smart-home-store-logo" width="210" alt="Smart Home Store" style="display:block;width:210px;max-width:72%;height:auto;border:0;margin:0 auto"></a>
+        </td></tr>
+        <tr><td align="center" style="padding:38px 28px;background-color:#eaf2ff;color:#10243e">
+          <div style="display:inline-block;width:62px;height:62px;line-height:62px;border:4px solid #ffffff;border-radius:50%;background-color:#1768ff;box-shadow:0 10px 24px rgba(23,104,255,.25);color:#ffffff;font-size:30px;font-weight:bold">✓</div>
+          <p style="margin:18px 0 7px;font-size:11px;font-weight:bold;letter-spacing:2px;color:#1768ff">ORDER CONFIRMED</p>
+          <h1 class="hero-title" style="margin:0;font-size:30px;line-height:1.4;color:#10243e">สั่งซื้อสำเร็จแล้ว</h1>
+          <p style="margin:9px 0 0;font-size:14px;line-height:1.8;color:#64748b">ขอบคุณคุณ <strong style="color:#1768ff">{$safeName}</strong><br>เราได้รับคำสั่งซื้อของคุณเรียบร้อยแล้ว</p>
+        </td></tr>
+        <tr><td class="email-body" style="padding:30px 36px;background-color:#ffffff">
+          <table class="order-meta" role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;margin-bottom:24px;background-color:#f7faff;border:1px solid #e3ecf8;border-radius:14px">
+            <tr><td style="padding:16px"><span style="font-size:12px;color:#7a8ba0">เลขคำสั่งซื้อ</span><br><strong style="font-size:18px;color:#1768ff">{$safeOrderNumber}</strong></td><td align="right" style="padding:16px"><span style="font-size:12px;color:#7a8ba0">วันที่สั่งซื้อ</span><br><strong>{$orderedAt}</strong></td></tr>
+          </table>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;margin:0 0 28px"><tr>
+            <td align="center" width="25%"><span style="display:inline-block;width:30px;height:30px;line-height:30px;border-radius:50%;background-color:#1768ff;color:#ffffff;font-weight:bold">✓</span><br><span class="step-label" style="font-size:10px;font-weight:bold;color:#1768ff">ยืนยันแล้ว</span></td>
+            <td align="center" width="25%"><span style="display:inline-block;width:30px;height:30px;line-height:30px;border-radius:50%;background-color:#eef2f7;color:#8b98aa;font-weight:bold">2</span><br><span class="step-label" style="font-size:10px;color:#8b98aa">กำลังเตรียม</span></td>
+            <td align="center" width="25%"><span style="display:inline-block;width:30px;height:30px;line-height:30px;border-radius:50%;background-color:#eef2f7;color:#8b98aa;font-weight:bold">3</span><br><span class="step-label" style="font-size:10px;color:#8b98aa">กำลังจัดส่ง</span></td>
+            <td align="center" width="25%"><span style="display:inline-block;width:30px;height:30px;line-height:30px;border-radius:50%;background-color:#eef2f7;color:#8b98aa;font-weight:bold">4</span><br><span class="step-label" style="font-size:10px;color:#8b98aa">ส่งสำเร็จ</span></td>
+          </tr></table>
+          <h2 style="margin:0 0 6px;font-size:18px;color:#10243e">รายการสินค้า</h2>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{$itemRows}</table>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:18px;font-size:14px">
+            <tr><td style="padding:5px 0;color:#64748b">ส่วนลด</td><td align="right" style="padding:5px 0;color:#16a36f">-฿{$safeDiscount}</td></tr>
+            <tr><td style="padding:5px 0;color:#64748b">ค่าจัดส่ง</td><td align="right" style="padding:5px 0">{$safeShipping}</td></tr>
+            <tr><td style="padding:13px 0 5px;border-top:1px solid #dce6f0;font-weight:bold">ยอดชำระทั้งหมด</td><td align="right" style="padding:13px 0 5px;border-top:1px solid #dce6f0;font-size:24px;font-weight:bold;color:#1768ff">฿{$safeGrandTotal}</td></tr>
+          </table>
+          <div style="margin-top:22px;padding:17px;border:1px solid #dfe9f5;border-radius:14px;background-color:#f7faff;font-size:13px;line-height:1.8;color:#52657c"><strong style="color:#10243e">การชำระเงิน</strong><br>{$safePaymentLabel}<br>เลขอ้างอิง: {$safePaymentReference}<br><span style="color:#0d9468">● ชำระเงินแล้ว (ระบบจำลอง)</span></div>
+          <div style="text-align:center;margin-top:26px"><a class="cta" href="{$safeOrderUrl}" target="_blank" style="display:inline-block;padding:16px 38px;border-radius:12px;background-color:#1768ff;color:#ffffff;font-size:15px;font-weight:bold;text-decoration:none;box-shadow:0 10px 24px rgba(23,104,255,.22)">ติดตามสถานะคำสั่งซื้อ&nbsp;&nbsp;→</a><p style="margin:12px 0 0;font-size:11px;color:#8a98aa">ดูรายการสินค้าและสถานะล่าสุดได้ทุกเวลา</p></div>
+        </td></tr>
+        <tr><td align="center" style="padding:23px 28px;background-color:#f7f9fc;font-size:11px;line-height:1.9;color:#8795a8"><strong style="color:#52657c">Smart Home Store</strong><br>ชีวิตง่ายขึ้นด้วยเทคโนโลยี<br>อีเมลนี้ถูกส่งอัตโนมัติหลังยืนยันคำสั่งซื้อ<br><a href="{$safeShop}" style="color:#1768ff;text-decoration:none">เยี่ยมชมเว็บไซต์</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="{$safeShop}/profile" style="color:#65758a;text-decoration:none">บัญชีของฉัน</a></td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>
+HTML;
+
+    $mail->AltBody = "สั่งซื้อสำเร็จแล้ว\nเลขคำสั่งซื้อ: {$orderNumber}\n\n" . implode("\n", $plainItems) . "\n\nส่วนลด: ฿" . number_format($discount, 2) . "\nค่าจัดส่ง: " . ($shipping > 0 ? '฿' . number_format($shipping, 2) : 'ฟรี') . "\nยอดรวม: ฿" . number_format($grandTotal, 2) . "\nวิธีชำระเงิน: {$paymentLabel}\nเลขอ้างอิง: {$paymentReference}\nดูคำสั่งซื้อ: {$orderUrl}";
+    $mail->send();
+}
