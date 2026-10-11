@@ -1,24 +1,37 @@
+import {and,count,desc,eq,inArray,notLike,sql,sum} from 'drizzle-orm';
 import {NextResponse} from 'next/server';
-import type {RowDataPacket} from 'mysql2';
+import {getDb} from '@/db';
+import {orders,payments,products,categories,users} from '@/db/schema';
 import {requireAdmin} from '@/lib/auth';
-import {db} from '@/lib/db';
+
+const revenueStatuses=['PAID','PREPARING','SHIPPING','DELIVERED'];
+
 export async function GET(){
  if(!await requireAdmin())return NextResponse.json({error:'เฉพาะผู้ดูแลระบบ'},{status:403});
  try{
-  const[[stats],[users],[orders],[products],[monthly]]=await Promise.all([
-   db.execute<RowDataPacket[]>(`SELECT
-    (SELECT COUNT(*) FROM users WHERE role='USER' AND email NOT LIKE '%@deleted.invalid') AS customers,
-    (SELECT COUNT(*) FROM orders) AS orders,
-    (SELECT COALESCE(SUM(grand_total),0) FROM orders WHERE status IN ('PAID','PREPARING','SHIPPING','DELIVERED')) AS revenue,
-    (SELECT COUNT(*) FROM products WHERE stock<10 AND status='ACTIVE') AS low_stock,
-    (SELECT COUNT(*) FROM orders WHERE status IN ('PAID','PREPARING')) AS awaiting_dispatch,
-    (SELECT COUNT(*) FROM orders WHERE status='PENDING_PAYMENT') AS awaiting_payment,
-    (SELECT COUNT(*) FROM orders WHERE status='DELIVERED') AS delivered`),
-   db.execute<RowDataPacket[]>("SELECT id,username,first_name,last_name,email,role,status,created_at FROM users WHERE role='ADMIN' OR email NOT LIKE '%@deleted.invalid' ORDER BY id DESC"),
-   db.execute<RowDataPacket[]>(`SELECT o.id,o.order_number,o.grand_total,o.status,o.payment_method,o.payment_reference,o.created_at,u.email,CONCAT(u.first_name,' ',u.last_name) AS customer_name FROM orders o JOIN users u ON u.id=o.user_id ORDER BY o.id DESC`),
-   db.execute<RowDataPacket[]>('SELECT id,sku,name,category,stock,status,price,discount_price FROM products ORDER BY id DESC'),
-   db.execute<RowDataPacket[]>(`SELECT DATE_FORMAT(created_at,'%Y-%m') AS month,COUNT(*) AS orders,COALESCE(SUM(CASE WHEN status IN ('PAID','PREPARING','SHIPPING','DELIVERED') THEN grand_total ELSE 0 END),0) AS revenue FROM orders GROUP BY month ORDER BY month DESC LIMIT 6`)
+  const database=getDb();
+  const [customerCount,orderCount,revenue,lowStock,awaitingDispatch,awaitingPayment,delivered,memberRows,orderRows,productRows,monthlyRows]=await Promise.all([
+   database.select({value:count()}).from(users).where(and(eq(users.role,'USER'),notLike(users.email,'%@deleted.invalid'))),
+   database.select({value:count()}).from(orders),
+   database.select({value:sum(orders.grandTotal)}).from(orders).where(inArray(orders.status,revenueStatuses)),
+   database.select({value:count()}).from(products).where(and(eq(products.status,'ACTIVE'),sql`${products.stock} < 10`)),
+   database.select({value:count()}).from(orders).where(inArray(orders.status,['PAID','PREPARING'])),
+   database.select({value:count()}).from(orders).where(eq(orders.status,'PENDING_PAYMENT')),
+   database.select({value:count()}).from(orders).where(eq(orders.status,'DELIVERED')),
+   database.select({id:users.id,username:users.username,first_name:users.firstName,last_name:users.lastName,email:users.email,role:users.role,status:users.status,created_at:users.createdAt}).from(users).where(sql`${users.role} = 'ADMIN' OR ${users.email} NOT LIKE '%@deleted.invalid'`).orderBy(desc(users.id)),
+   database.select({id:orders.id,order_number:orders.orderNumber,grand_total:orders.grandTotal,status:orders.status,payment_method:payments.method,payment_reference:payments.reference,created_at:orders.createdAt,email:users.email,customer_name:sql<string>`trim(${users.firstName} || ' ' || ${users.lastName})`}).from(orders).innerJoin(users,eq(users.id,orders.userId)).leftJoin(payments,eq(payments.orderId,orders.id)).orderBy(desc(orders.id)),
+   database.select({id:products.id,sku:products.sku,name:products.name,category:categories.name,stock:products.stock,status:products.status,price:products.price,discount_price:products.discountPrice}).from(products).leftJoin(categories,eq(categories.id,products.categoryId)).orderBy(desc(products.id)),
+   database.select({month:sql<string>`strftime('%Y-%m', ${orders.createdAt})`,orders:count(),revenue:sql<number>`coalesce(sum(case when ${orders.status} in ('PAID','PREPARING','SHIPPING','DELIVERED') then ${orders.grandTotal} else 0 end),0)`}).from(orders).groupBy(sql`strftime('%Y-%m', ${orders.createdAt})`).orderBy(desc(sql`strftime('%Y-%m', ${orders.createdAt})`)).limit(6),
   ]);
-  return NextResponse.json({stats:stats[0],users,orders,products,monthly});
- }catch{return NextResponse.json({error:'โหลดข้อมูลหลังบ้านไม่สำเร็จ กรุณาลองอีกครั้ง'},{status:500})}
+  return NextResponse.json({
+   stats:{customers:customerCount[0]?.value??0,orders:orderCount[0]?.value??0,revenue:Number(revenue[0]?.value??0),low_stock:lowStock[0]?.value??0,awaiting_dispatch:awaitingDispatch[0]?.value??0,awaiting_payment:awaitingPayment[0]?.value??0,delivered:delivered[0]?.value??0},
+   users:memberRows,
+   orders:orderRows,
+   products:productRows,
+   monthly:monthlyRows,
+  });
+ }catch(error){
+  console.error('admin_dashboard_load_failed',error);
+  return NextResponse.json({error:'โหลดข้อมูลหลังบ้านไม่สำเร็จ กรุณาตรวจสอบ D1 และลองอีกครั้ง'},{status:500});
+ }
 }
